@@ -57,6 +57,18 @@ static FILE* utf8_open(const char*path){
     return fopen(path,"wb");
 #endif
 }
+static void write_chapter_name(FILE *out, const char *name, const Config *config) {
+    size_t target_length = strlen(config->replace_target);
+    if (target_length) {
+        const char *match;
+        while ((match = strstr(name, config->replace_target)) != NULL) {
+            fwrite(name, 1, (size_t)(match - name), out);
+            fputs(config->replace_text, out);
+            name = match + target_length;
+        }
+    }
+    fputs(name, out);
+}
 int generate_timestamps(const Config*c,const Session*s,double offset_override,int estimate_override,char*err,size_t ec){
     if(!s->start||s->end<=s->start){snprintf(err,ec,"完了済み配信セッションが必要です");return 0;}
     const char *score_path=NULL,*table=NULL;
@@ -119,26 +131,26 @@ int generate_timestamps(const Config*c,const Session*s,double offset_override,in
     sqlite3_finalize(plays);sqlite3_finalize(lookup);sqlite3_close(songs);sqlite3_close(score);
     if(run_rc!=SQLITE_DONE)goto fail;
     qsort(chapters,(size_t)n,sizeof(*chapters),cmp_chapter);
-    char stem[BST_PATH],out[BST_PATH],report[BST_PATH];
-    if(!session_path(s,stem,sizeof(stem))){snprintf(err,ec,"セッションIDが不正です");goto fail;}
-    char *dot=strrchr(stem,'.');if(dot)*dot=0;
-    size_t stem_len = strlen(stem);
-    const char *stamp_suffix = "_timestamps.txt";
-    const char *report_suffix = "_report.txt";
-    if (stem_len + strlen(stamp_suffix) + 1 > sizeof(out) ||
-        stem_len + strlen(report_suffix) + 1 > sizeof(report)) {
+    char dir[BST_PATH],out[BST_PATH],report[BST_PATH],relative[256];
+    if (!*s->id) { snprintf(err, ec, "セッションIDが不正です"); goto fail; }
+    snprintf(relative, sizeof(relative), "timestamps/%s_timestamp.txt", s->id);
+    app_path(out, sizeof(out), relative);
+    snprintf(relative, sizeof(relative), "sessions/%s_report.txt", s->id);
+    app_path(report, sizeof(report), relative);
+    if (!*out || !*report) {
         snprintf(err, ec, "出力パスが長すぎます");
         goto fail;
     }
-    memcpy(out, stem, stem_len);
-    strcpy(out + stem_len, stamp_suffix);
-    memcpy(report, stem, stem_len);
-    strcpy(report + stem_len, report_suffix);
+    app_path(dir, sizeof(dir), "timestamps");
+    app_mkdir(dir);
     FILE *f=utf8_open(out);if(!f){snprintf(err,ec,"出力できません: %s",out);goto fail;}
     fputs("\xef\xbb\xbf",f);
     fputs("0:00 配信開始\n",f);
     for(int i=0;i<n;i++){char stamp[64];app_chapter(chapters[i].sec,stamp,sizeof(stamp));
-        fprintf(f,"%s %s\n",stamp,chapters[i].name);}
+        fprintf(f,"%s ",stamp);
+        write_chapter_name(f, chapters[i].name, c);
+        fputc('\n', f);
+    }
     char endtime[64];app_chapter((double)(s->end-s->start),endtime,sizeof(endtime));
     fprintf(f,"%s 配信終了\n",endtime);
     int writeok=ferror(f)==0;writeok=fclose(f)==0&&writeok;

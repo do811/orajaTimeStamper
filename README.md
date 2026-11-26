@@ -15,13 +15,13 @@ OBS Studioの配信開始・終了を監視し、**配信終了後にだけ**bea
 2. OBSの**配信を開始する前**に`timestamp.exe`または`start_monitor.bat`を実行する。設定が足りなければ設定GUIを自動表示。
 3. OBSの配信開始イベントで、開始時刻を`sessions/…json`に保存。
 4. 配信中はDBを繰り返し読まず、OBS WebSocket v5の状態イベントだけを待つ。
-5. OBSの配信終了イベントで終了時刻を保存。その後、`scoredatalog.db`と`songdata.db`から結果を読み取り`_timestamps.txt`と`_report.txt`を生成。
+5. OBSの配信終了イベントで終了時刻を保存。その後、`scoredatalog.db`と`songdata.db`から結果を読み取り`timestamps/`に`_timestamp.txt`、`sessions/`に`_report.txt`を生成。
 6. `Ctrl+C`でコンソール監視を終了。配信中に監視を中断した場合は未完了セッションを残します。
 
 ## ビルド（Windows / MinGW）
 
 1. MinGW の GCC を用意します。既定のパスは `D:\gcc\mingw32\bin\gcc.exe` です。
-2. [SQLite のダウンロードページ](https://www.sqlite.org/download.html) から SQLite amalgamation を入手し、`sqlite3.c` と `sqlite3.h` を `external\sqlite\` に置きます。
+2. 同梱の `external\sqlite\sqlite3.c` と `sqlite3.h` を使います。
 3. PowerShell でプロジェクトルートを開き、ビルドします。
 
    ```powershell
@@ -55,6 +55,10 @@ Win32 GUIから以下を編集できます。
 | アーティスト名を含める | デフォルトOFF |
 | 補正秒数 | 正の数ならタイムスタンプをその秒数早める（例 `160` / `2:40`） |
 
+### 特定の文字を置き換える
+
+`config.exe` の「対象文字」に1文字、「置き換え後」に出力したい文字列を入力します。たとえば対象を `＃`、置き換え後を `No. ` にすると、曲名の `＃1` が `No. 1` になります。対象文字が空欄なら無効、置き換え後が空欄なら対象文字を削除します。置換はタイムスタンプ出力の曲名欄（サブタイトルと、表示を有効にした場合のアーティスト名を含む）に適用されます。
+
 `score.db`と`scoredatalog.db`は両方必須ではありません。**どちらか一方が存在すれば保存できます**。両方あれば`scoredatalog.db`を優先します。
 
 `config.json`はEXEのあるフォルダに保存されます。Windows版のOBSパスワードは**Windows DPAPI（ユーザー単位）で暗号化して保存**し、JSON中に平文を保存しません。別PC・別Windowsアカウントへ設定をコピーした場合、パスワードは再設定してください。`config.json`や実データはGitHubにコミットしないでください。
@@ -66,7 +70,7 @@ Win32 GUIから以下を編集できます。
 通常は次のコマンドだけで監視できます。
 
 ```bat
-cd /d C:\BeatorajaStreamTimestamps_C
+cd /d C:\orajaTimeStamper
 timestamp.exe
 ```
 
@@ -101,7 +105,7 @@ timestamp.exe generate --session "sessions\20261116_190000_1794823200.json"
 ## 出力構成
 
 ```text
-BeatorajaStreamTimestamps_C/
+orajaTimeStamper/
   timestamp.exe
   config.exe
   config.json               # 初回GUI保存後
@@ -109,8 +113,9 @@ BeatorajaStreamTimestamps_C/
   last_session.json         # 最後に終了した配信
   sessions/
     YYYYMMDD_HHMMSS_....json
-    YYYYMMDD_HHMMSS_...._timestamps.txt
     YYYYMMDD_HHMMSS_...._report.txt
+  timestamps/
+    YYYYMMDD_HHMMSS_...._timestamp.txt
   logs/
     timestamp.log                # 最大2MiB + 世代バックアップ3つ
   src/                      # Cソース
@@ -118,7 +123,7 @@ BeatorajaStreamTimestamps_C/
   start_monitor.bat
 ```
 
-生成される`_timestamps.txt`はUTF-8 BOM付きです。
+生成される`_timestamp.txt`はUTF-8 BOM付きです。
 
 ```text
 0:00 配信開始

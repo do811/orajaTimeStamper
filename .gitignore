@@ -3,6 +3,7 @@
 /active_session.json
 /last_session.json
 /sessions/
+/timestamps/
 /logs/
 /history.txt
 /timestamps_*.txt
@@ -23,7 +24,9 @@
 *.obj
 
 # ローカルで配置する SQLite amalgamation
-/external/sqlite/
+/external/sqlite/*
+!/external/sqlite/sqlite3.c
+!/external/sqlite/sqlite3.h
 /external/sqlite3/
 /sqlite/
 /sqlite3/

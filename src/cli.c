@@ -24,7 +24,7 @@ int launch_config_and_wait(void){
 }
 #endif
 static void help(void){
-    puts("Beatoraja Stream Timestamps (C edition)\n"
+    puts("orajaTimeStamper\n"
          "  timestamp.exe             OBS監視を開始（設定がなければconfig.exeを起動）\n"
          "  timestamp.exe monitor     上と同じ\n"
          "  timestamp.exe start [--at YYYY-MM-DDTHH:MM:SS+09:00]\n"

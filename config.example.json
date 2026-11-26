@@ -6,5 +6,7 @@
   "estimate_song_start": true,
   "auto_generate": true,
   "include_artist": false,
-  "offset_seconds": 0
+  "offset_seconds": 0,
+  "replace_target": "",
+  "replace_text": ""
 }

@@ -10,7 +10,7 @@
 #include "app.h"
 
 #define WIN_WIDTH 840
-#define WIN_HEIGHT 610
+#define WIN_HEIGHT 705
 #define ID_SONG 101
 #define ID_SCORE 102
 #define ID_SCORELOG 103
@@ -21,6 +21,8 @@
 #define ID_ESTIMATE 108
 #define ID_AUTOGEN 109
 #define ID_ARTIST 110
+#define ID_REPLACE_TARGET 111
+#define ID_REPLACE_TEXT 112
 #define ID_SAVE 120
 #define ID_CANCEL 121
 #define ID_BROWSE1 201
@@ -28,7 +30,7 @@
 #define ID_BROWSE3 203
 static Config cfg;
 static HFONT font;
-static HWND fields[11];
+static HWND fields[ID_REPLACE_TEXT - 100 + 1];
 static HINSTANCE instance;
 static HWND win;
 static int saved_this_run=0;
@@ -47,6 +49,14 @@ static void browse(int id){
     of.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_EXPLORER;
     if(GetOpenFileNameW(&of))SetWindowTextW(fields[id-100],chosen);
 }
+static int read_replacement(int id, char *out, size_t cap) {
+    HWND edit = fields[id - 100];
+    wchar_t text[BST_TEXT + 1];
+    if (GetWindowTextLengthW(edit) >= (int)cap) return 0;
+    GetWindowTextW(edit, text, BST_TEXT + 1);
+    return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text, -1,
+                               out, (int)cap, NULL, NULL) != 0;
+}
 static void save(){
     edit_get(ID_SONG,cfg.song_db,sizeof(cfg.song_db));
     edit_get(ID_SCORE,cfg.score_db,sizeof(cfg.score_db));
@@ -63,6 +73,14 @@ static void save(){
     cfg.estimate_song_start=SendMessageW(fields[ID_ESTIMATE-100],BM_GETCHECK,0,0)==BST_CHECKED;
     cfg.auto_generate=SendMessageW(fields[ID_AUTOGEN-100],BM_GETCHECK,0,0)==BST_CHECKED;
     cfg.include_artist=SendMessageW(fields[ID_ARTIST-100],BM_GETCHECK,0,0)==BST_CHECKED;
+    if (!read_replacement(ID_REPLACE_TARGET, cfg.replace_target, sizeof(cfg.replace_target))) {
+        MessageBoxW(win, L"対象文字は1文字にしてください。", L"保存できません", MB_ICONERROR);
+        return;
+    }
+    if (!read_replacement(ID_REPLACE_TEXT, cfg.replace_text, sizeof(cfg.replace_text))) {
+        MessageBoxW(win, L"置き換え後の文字列はUTF-8で1023バイトまで入力できます。", L"保存できません", MB_ICONERROR);
+        return;
+    }
     if(!config_validate(&cfg,err,sizeof(err))||!config_save(&cfg,err,sizeof(err))){
         wchar_t w[1024];app_utf8_to_wide(err,w,1024);
         MessageBoxW(win,w,L"保存できません",MB_ICONERROR|MB_OK);return;
@@ -75,7 +93,7 @@ static void make_ui(){
     NONCLIENTMETRICSW m={0};m.cbSize=sizeof(m);
     if(SystemParametersInfoW(SPI_GETNONCLIENTMETRICS,sizeof(m),&m,0))
         font=CreateFontIndirectW(&m.lfMessageFont);
-    element(L"STATIC",L"beatoraja 配信タイムスタンプ ─ 初期設定",SS_LEFT,22,18,760,30,0);
+    element(L"STATIC",L"orajaTimeStamper ─ 設定",SS_LEFT,22,18,760,30,0);
     element(L"STATIC",L"DBを参照し、OBS WebSocket v5の接続先を設定します。",SS_LEFT,22,54,760,24,0);
     struct {int id;int y;const wchar_t*label;} dbs[]={
         {ID_SONG,105,L"楽曲DB  (songdata.db / song.db)"},
@@ -99,11 +117,18 @@ static void make_ui(){
     fields[ID_ESTIMATE-100]=element(L"BUTTON",L"曲開始時刻を結果保存時刻と譜面長から推定",BS_AUTOCHECKBOX|WS_TABSTOP,22,458,490,24,ID_ESTIMATE);
     fields[ID_AUTOGEN-100]=element(L"BUTTON",L"配信終了時に自動生成",BS_AUTOCHECKBOX|WS_TABSTOP,22,491,320,24,ID_AUTOGEN);
     fields[ID_ARTIST-100]=element(L"BUTTON",L"曲名にアーティスト名を含める",BS_AUTOCHECKBOX|WS_TABSTOP,365,491,355,24,ID_ARTIST);
-    element(L"BUTTON",L"保存",BS_DEFPUSHBUTTON|WS_TABSTOP,576,530,110,34,ID_SAVE);
-    element(L"BUTTON",L"キャンセル",BS_PUSHBUTTON|WS_TABSTOP,699,530,110,34,ID_CANCEL);
+    element(L"STATIC",L"特定の文字を置き換える（対象文字が空欄の場合は無効）",SS_LEFT,22,527,760,24,0);
+    element(L"STATIC",L"対象文字（1文字）",SS_LEFT,22,555,170,24,0);
+    element(L"STATIC",L"置き換え後（空欄で削除）",SS_LEFT,203,555,350,24,0);
+    fields[ID_REPLACE_TARGET-100]=element(L"EDIT",L"",WS_BORDER|ES_AUTOHSCROLL|WS_TABSTOP,22,579,150,28,ID_REPLACE_TARGET);
+    fields[ID_REPLACE_TEXT-100]=element(L"EDIT",L"",WS_BORDER|ES_AUTOHSCROLL|WS_TABSTOP,203,579,607,28,ID_REPLACE_TEXT);
+    element(L"BUTTON",L"保存",BS_DEFPUSHBUTTON|WS_TABSTOP,576,625,110,34,ID_SAVE);
+    element(L"BUTTON",L"キャンセル",BS_PUSHBUTTON|WS_TABSTOP,699,625,110,34,ID_CANCEL);
     edit_set(ID_SONG,cfg.song_db);edit_set(ID_SCORE,cfg.score_db);
     edit_set(ID_SCORELOG,cfg.scoredatalog_db);edit_set(ID_HOST,cfg.obs_host);
     edit_set(ID_PASSWORD,cfg.obs_password);
+    edit_set(ID_REPLACE_TARGET,cfg.replace_target);
+    edit_set(ID_REPLACE_TEXT,cfg.replace_text);
     char tmp[80];snprintf(tmp,sizeof(tmp),"%d",cfg.obs_port);edit_set(ID_PORT,tmp);
     snprintf(tmp,sizeof(tmp),"%.3f",cfg.offset_seconds);edit_set(ID_OFFSET,tmp);
     SendMessageW(fields[ID_ESTIMATE-100],BM_SETCHECK,cfg.estimate_song_start?BST_CHECKED:BST_UNCHECKED,0);
@@ -133,7 +158,7 @@ int WINAPI wWinMain(HINSTANCE h,HINSTANCE prev,PWSTR command,int show){
     WNDCLASSW cls={0};cls.lpfnWndProc=wndproc;cls.hInstance=h;cls.lpszClassName=L"BST_Config";
     cls.hCursor=LoadCursor(NULL,IDC_ARROW);cls.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);
     if(!RegisterClassW(&cls))return 1;
-    HWND window=CreateWindowExW(0,cls.lpszClassName,L"Beatoraja Stream Timestamps - config.exe",
+    HWND window=CreateWindowExW(0,cls.lpszClassName,L"orajaTimeStamper - config.exe",
           WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_VISIBLE,
           CW_USEDEFAULT,CW_USEDEFAULT,WIN_WIDTH,WIN_HEIGHT,NULL,NULL,h,NULL);
     if(!window)return 1;

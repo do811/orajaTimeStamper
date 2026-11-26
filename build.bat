@@ -2,52 +2,58 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-rem Prefer an MSYS2 toolchain that has both GCC and the SQLite development files.
-rem Set BST_MSYS_PREFIX first to override the default (example: D:\msys64\ucrt64).
-if defined BST_MSYS_PREFIX goto :select_toolchain
+rem Optional overrides: BST_CC, BST_MSYS_PREFIX and BST_SQLITE_DIR.
+set "SQLITE_DIR=%~dp0external\sqlite"
+if defined BST_SQLITE_DIR set "SQLITE_DIR=%BST_SQLITE_DIR%"
+if not exist "%SQLITE_DIR%\sqlite3.c" goto :missing_sqlite
+if not exist "%SQLITE_DIR%\sqlite3.h" goto :missing_sqlite
+
+if defined BST_CC goto :explicit_compiler
+if defined BST_MSYS_PREFIX goto :msys_compiler
 if exist "C:\msys64\ucrt64\bin\gcc.exe" set "BST_MSYS_PREFIX=C:\msys64\ucrt64"
 if not defined BST_MSYS_PREFIX if exist "C:\msys64\mingw64\bin\gcc.exe" set "BST_MSYS_PREFIX=C:\msys64\mingw64"
-
-:select_toolchain
-set "CC=gcc"
-set "INC="
-set "LIB="
-set "BIN_DIR="
-if not defined BST_MSYS_PREFIX goto :path_compiler
-if not exist "%BST_MSYS_PREFIX%\bin\gcc.exe" goto :missing_gcc
-if not exist "%BST_MSYS_PREFIX%\include\sqlite3.h" goto :missing_sqlite
-if not exist "%BST_MSYS_PREFIX%\lib\libsqlite3.dll.a" if not exist "%BST_MSYS_PREFIX%\lib\libsqlite3.a" goto :missing_sqlite
-set "BIN_DIR=%BST_MSYS_PREFIX%\bin"
-set "CC=%BIN_DIR%\gcc.exe"
-set "INC=-I%BST_MSYS_PREFIX%\include"
-set "LIB=-L%BST_MSYS_PREFIX%\lib"
-set "PATH=%BIN_DIR%;%PATH%"
-goto :compiler_ready
-
-:path_compiler
-where gcc >nul 2>nul
-if errorlevel 1 goto :missing_gcc
-for /f "delims=" %%G in ('where gcc') do (
-    set "BIN_DIR=%%~dpG"
+if defined BST_MSYS_PREFIX goto :msys_compiler
+if exist "D:\gcc\mingw32\bin\gcc.exe" (
+    set "BST_CC=D:\gcc\mingw32\bin\gcc.exe"
+    goto :explicit_compiler
+)
+for /f "delims=" %%G in ('where gcc.exe 2^>nul') do (
+    set "CC=%%~fG"
     goto :compiler_ready
 )
+goto :missing_gcc
+
+:explicit_compiler
+set "CC=%BST_CC%"
+goto :compiler_ready
+
+:msys_compiler
+set "CC=%BST_MSYS_PREFIX%\bin\gcc.exe"
 
 :compiler_ready
-echo Using compiler: %CC%
+if not exist "%CC%" goto :missing_gcc
+for %%G in ("%CC%") do set "BIN_DIR=%%~dpG"
+set "PATH=%BIN_DIR%;%PATH%"
+if not exist build mkdir build
+if not exist build goto :sqlite_failed
+echo Using compiler: "%CC%"
+echo Using SQLite sources: "%SQLITE_DIR%"
 set "WARN=-std=c11 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0A00"
-echo [1/2] Building timestamp.exe ...
-"%CC%" %WARN% %INC% -municode src\cli.c src\common.c src\json.c src\session.c src\generator.c src\obs_win.c %LIB% -o timestamp.exe -lsqlite3 -lwinhttp -lcrypt32 -lbcrypt -lshell32 -lm
+echo [1/3] Compiling SQLite ...
+"%CC%" -std=c11 -O2 -DSQLITE_OMIT_LOAD_EXTENSION -c "%SQLITE_DIR%\sqlite3.c" -o "build\sqlite3.o"
+if errorlevel 1 goto :sqlite_failed
+
+echo [2/3] Building timestamp.exe ...
+"%CC%" %WARN% -I"%SQLITE_DIR%" -municode src\cli.c src\common.c src\json.c src\session.c src\generator.c src\obs_win.c "build\sqlite3.o" -o timestamp.exe -lwinhttp -lcrypt32 -lbcrypt -lshell32 -lm
 if errorlevel 1 goto :timestamp_failed
 
-echo [2/2] Building config.exe ...
-"%CC%" %WARN% %INC% -municode -mwindows src\config_gui.c src\common.c src\json.c %LIB% -o config.exe -lcomdlg32 -lcrypt32 -luser32 -lgdi32 -lm
+echo [3/3] Building config.exe ...
+"%CC%" %WARN% -municode -mwindows src\config_gui.c src\common.c src\json.c -o config.exe -lcomdlg32 -lcrypt32 -luser32 -lgdi32 -lm
 if errorlevel 1 goto :config_failed
 
-rem Put the runtime DLLs beside the EXEs. Only copy from the compiler selected above.
-if defined BIN_DIR (
-    for %%D in (libsqlite3-0.dll libwinpthread-1.dll libgcc_s_seh-1.dll) do (
-        if exist "%BIN_DIR%\%%D" copy /Y "%BIN_DIR%\%%D" "%~dp0%%D" >nul
-    )
+rem Copy compiler runtime DLLs from the selected toolchain.
+for %%D in (libwinpthread-1.dll libgcc_s_seh-1.dll libgcc_s_dw2-1.dll libgcc_s_sjlj-1.dll) do (
+    if exist "%BIN_DIR%%%D" copy /Y "%BIN_DIR%%%D" "%~dp0%%D" >nul
 )
 if not exist sessions mkdir sessions
 if not exist logs mkdir logs
@@ -56,21 +62,20 @@ echo Build complete: timestamp.exe / config.exe
 exit /b 0
 
 :missing_gcc
-echo ERROR: GCC not found. Install MSYS2 UCRT64 GCC.
-echo   pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-sqlite3
+echo ERROR: GCC not found. Set BST_CC to the full path of MinGW gcc.exe.
 exit /b 1
 
 :missing_sqlite
-echo ERROR: SQLite3 development files are missing from %BST_MSYS_PREFIX%.
-echo Open the matching MSYS2 terminal and install SQLite3:
-echo   UCRT64 : pacman -S --needed mingw-w64-ucrt-x86_64-sqlite3
-echo   MINGW64: pacman -S --needed mingw-w64-x86_64-sqlite3
+echo ERROR: sqlite3.c and sqlite3.h are required in "%SQLITE_DIR%".
+echo Restore external\sqlite or set BST_SQLITE_DIR to the amalgamation folder.
+exit /b 1
+
+:sqlite_failed
+echo ERROR: Compiling SQLite or creating the build directory failed.
 exit /b 1
 
 :timestamp_failed
 echo ERROR: timestamp.exe build failed.
-echo If you see ^"sqlite3.h: No such file or directory^", install the
-echo matching SQLite3 DEVELOPMENT package for the GCC being used.
 exit /b 1
 
 :config_failed

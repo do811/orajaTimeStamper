@@ -51,19 +51,40 @@ class TestTimestamps(unittest.TestCase):
         self.assertTrue((self.path / "active_session.json").exists())
         self.run_bin("stop", "--at", "2026-11-16T12:05:00+00:00")
         self.assertFalse((self.path / "active_session.json").exists())
-        outputs=list((self.path / "sessions").glob("*_timestamps.txt"))
+        outputs=list((self.path / "timestamps").glob("*_timestamp.txt"))
         self.assertEqual(len(outputs), 1)
+        self.assertFalse(list((self.path / "sessions").glob("*_timestamp*.txt")))
+        self.assertEqual(len(list((self.path / "sessions").glob("*_report.txt"))), 1)
         text=outputs[0].read_text("utf-8-sig")
         self.assertEqual(text.splitlines(), ["0:00 配信開始", "0:40 テスト曲 [HYPER]", "2:20 テスト曲 [HYPER]", "5:00 配信終了"])
         self.run_bin("generate", "--offset", "30", "--basis", "result")
         self.assertEqual(outputs[0].read_text("utf-8-sig").splitlines()[1], "1:10 テスト曲 [HYPER]")
+    def test_replacement_and_regeneration(self):
+        with sqlite3.connect(self.song) as conn:
+            conn.execute("UPDATE song SET title = ?, artist = ?", ("♪テスト♪", "作曲者♪"))
+        self.write_config(replace_target="♪", replace_text='♪"曲" ', include_artist=True)
+        self.run_bin("start", "--at", "2026-11-16T12:00:00Z")
+        self.run_bin("stop", "--at", "2026-11-16T12:05:00Z")
+        output = next((self.path / "timestamps").glob("*_timestamp.txt"))
+        self.assertEqual(output.read_text("utf-8-sig").splitlines()[1],
+                         '0:40 ♪"曲" テスト♪"曲"  [HYPER] / 作曲者♪"曲" ')
+        self.write_config(replace_target="♪", replace_text="")
+        self.run_bin("generate")
+        self.assertEqual(output.read_text("utf-8-sig").splitlines()[1], "0:40 テスト [HYPER]")
+        self.write_config(replace_target=":", replace_text="→")
+        self.run_bin("generate")
+        self.assertTrue(output.read_text("utf-8-sig").startswith("0:00 配信開始\n0:40 "))
+        self.write_config(replace_target="ab", replace_text="x")
+        p = self.run_bin("generate", rc=1)
+        self.assertIn("対象文字は1文字", p.stdout)
+
     def test_autogenerate_disabled(self):
         self.write_config(auto_generate=False)
         self.run_bin("start", "--at", "2026-11-16T12:00:00Z")
         self.run_bin("stop", "--at", "2026-11-16T12:05:00Z")
-        self.assertFalse(list((self.path / "sessions").glob("*_timestamps.txt")))
+        self.assertFalse(list((self.path / "timestamps").glob("*_timestamp.txt")))
         self.run_bin("generate")
-        self.assertTrue(list((self.path / "sessions").glob("*_timestamps.txt")))
+        self.assertTrue(list((self.path / "timestamps").glob("*_timestamp.txt")))
 
     def test_manual_bad_time_and_double_start(self):
         self.run_bin("start", "--at", "2026-11-16T12:00:00Z")
@@ -77,7 +98,7 @@ class TestTimestamps(unittest.TestCase):
         self.run_bin("start", "--at", "2026-11-16T12:00:00Z")
         self.run_bin("stop", "--at", "2026-11-16T12:05:00Z")
         self.run_bin("generate", "--offset", "2:40")
-        text=list((self.path / "sessions").glob("*_timestamps.txt"))[0].read_text("utf-8-sig")
+        text=list((self.path / "timestamps").glob("*_timestamp.txt"))[0].read_text("utf-8-sig")
         self.assertIn("0:00 テスト曲",text)
         self.assertIn("[HYPER]",text)
 
@@ -85,7 +106,7 @@ class TestTimestamps(unittest.TestCase):
         self.log.unlink()
         self.run_bin("start", "--at", "2026-11-16T12:00:00Z")
         self.run_bin("stop", "--at", "2026-11-16T12:05:00Z")
-        outputs=list((self.path / "sessions").glob("*_timestamps.txt"))
+        outputs=list((self.path / "timestamps").glob("*_timestamp.txt"))
         self.assertEqual(len(outputs[0].read_text("utf-8-sig").splitlines()),3)
         report=list((self.path / "sessions").glob("*_report.txt"))[0].read_text("utf-8-sig")
         self.assertIn("score.db",report)
@@ -97,14 +118,14 @@ class TestTimestamps(unittest.TestCase):
     def test_local_time_offset(self):
         self.run_bin("start","--at","2026-11-16T21:00:00+09:00")
         self.run_bin("stop","--at","2026-11-16T21:05:00+09:00")
-        outputs=list((self.path / "sessions").glob("*_timestamps.txt"))
+        outputs=list((self.path / "timestamps").glob("*_timestamp.txt"))
         self.assertIn("0:40 テスト曲",outputs[0].read_text("utf-8-sig"))
     def test_missing_title_and_negative_clamp(self):
         with sqlite3.connect(self.log) as conn:
             conn.execute("INSERT INTO scoredatalog VALUES (?,?)",("b"*64,self.base+20))
         self.run_bin("start","--at","2026-11-16T12:00:00Z")
         self.run_bin("stop","--at","2026-11-16T12:05:00Z")
-        text=list((self.path/"sessions").glob("*_timestamps.txt"))[0].read_text("utf-8-sig")
+        text=list((self.path/"timestamps").glob("*_timestamp.txt"))[0].read_text("utf-8-sig")
         self.assertIn("[曲名不明",text)
         self.assertIn("0:40 テスト曲",text)
     def test_python_v1_session_reuse(self):
@@ -112,6 +133,6 @@ class TestTimestamps(unittest.TestCase):
         manual.write_text(json.dumps({"start":"2026-11-16T21:00:00+09:00", "end":"2026-11-16T21:05:00+09:00",
                    "start_method":"obs_event","end_method":"obs_event"}),encoding="utf8")
         self.run_bin("generate","--session",str(manual))
-        self.assertEqual((self.path/"sessions"/"legacy_timestamps.txt").read_text("utf-8-sig").splitlines()[1],"0:40 テスト曲 [HYPER]")
+        self.assertEqual((self.path/"timestamps"/"legacy_timestamp.txt").read_text("utf-8-sig").splitlines()[1],"0:40 テスト曲 [HYPER]")
 
 if __name__ == "__main__": unittest.main()

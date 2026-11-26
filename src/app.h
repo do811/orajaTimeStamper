@@ -18,6 +18,8 @@ typedef struct {
     int auto_generate;
     int include_artist;
     double offset_seconds;
+    char replace_target[5];     /* One UTF-8 code point plus the terminator. */
+    char replace_text[BST_TEXT];
 } Config;
 
 void app_root(char *out, size_t cap);

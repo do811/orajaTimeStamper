@@ -185,7 +185,7 @@ void config_defaults(Config *c){memset(c,0,sizeof(*c));snprintf(c->obs_host,size
 static int dpapi_encrypt(const char *src,char*out,size_t cap){
     if(!*src){*out=0;return 1;}
     DATA_BLOB in={(DWORD)strlen(src),(BYTE*)src},encrypted={0};
-    if(!CryptProtectData(&in,L"Beatoraja Stream Timestamps",NULL,NULL,NULL,0,&encrypted))return 0;
+    if(!CryptProtectData(&in,L"orajaTimeStamper",NULL,NULL,NULL,0,&encrypted))return 0;
     DWORD need=0;CryptBinaryToStringA(encrypted.pbData,encrypted.cbData,CRYPT_STRING_BASE64|CRYPT_STRING_NOCRLF,NULL,&need);
     int ok=need<=cap && CryptBinaryToStringA(encrypted.pbData,encrypted.cbData,CRYPT_STRING_BASE64|CRYPT_STRING_NOCRLF,out,&need);
     LocalFree(encrypted.pbData);return ok;
@@ -215,6 +215,24 @@ int config_load(Config*c,char*err,size_t ec){
     if(json_get(j,"auto_generate",value,sizeof(value)))c->auto_generate=!strcmp(value,"true");
     if(json_get(j,"include_artist",value,sizeof(value)))c->include_artist=!strcmp(value,"true");
     if(json_get(j,"offset_seconds",value,sizeof(value)))c->offset_seconds=strtod(value,NULL);
+    if (json_get(j, "replace_target", value, sizeof(value))) {
+        size_t len = strlen(value);
+        if (len >= sizeof(c->replace_target)) {
+            free(j);
+            snprintf(err, ec, "置換の対象文字は1文字にしてください");
+            return 0;
+        }
+        memcpy(c->replace_target, value, len + 1);
+    }
+    if (json_get(j, "replace_text", value, sizeof(value))) {
+        size_t len = strlen(value);
+        if (len >= sizeof(c->replace_text)) {
+            free(j);
+            snprintf(err, ec, "置き換え後の文字列が長すぎます");
+            return 0;
+        }
+        memcpy(c->replace_text, value, len + 1);
+    }
     char obs[4096];if(json_get_object(j,"obs",obs,sizeof(obs))){
         if (json_get(obs, "host", value, sizeof(value))) {
             size_t len = strlen(value);
@@ -236,12 +254,37 @@ int config_load(Config*c,char*err,size_t ec){
     }
     free(j);return 1;
 }
+static int single_utf8_character(const char *text) {
+    const unsigned char *p = (const unsigned char *)text;
+    size_t len = strlen(text);
+    if (len == 1) return p[0] < 0x80;
+    if (len < 2 || len > 4) return 0;
+    if ((len == 2 && (p[0] < 0xc2 || p[0] > 0xdf)) ||
+        (len == 3 && (p[0] < 0xe0 || p[0] > 0xef)) ||
+        (len == 4 && (p[0] < 0xf0 || p[0] > 0xf4))) return 0;
+    for (size_t i = 1; i < len; i++) {
+        if ((p[i] & 0xc0) != 0x80) return 0;
+    }
+    return !(p[0] == 0xe0 && p[1] < 0xa0) &&
+           !(p[0] == 0xed && p[1] >= 0xa0) &&
+           !(p[0] == 0xf0 && p[1] < 0x90) &&
+           !(p[0] == 0xf4 && p[1] >= 0x90);
+}
 int config_validate(const Config*c,char*err,size_t ec){
     if(!*c->song_db||!app_file_exists(c->song_db)){snprintf(err,ec,"song_db のファイルを指定してください");return 0;}
     if((!*c->scoredatalog_db||!app_file_exists(c->scoredatalog_db))&&
        (!*c->score_db||!app_file_exists(c->score_db))){snprintf(err,ec,"scoredatalog_db または score_db が必要です");return 0;}
     if(!*c->obs_host||c->obs_port<1||c->obs_port>65535){snprintf(err,ec,"OBSのホスト/ポートを確認してください");return 0;}
     if(c->offset_seconds< -86400||c->offset_seconds>86400){snprintf(err,ec,"補正秒数は-86400～86400にしてください");return 0;}
+    if (*c->replace_target && (!single_utf8_character(c->replace_target) ||
+                               strpbrk(c->replace_target, "\r\n"))) {
+        snprintf(err, ec, "置換の対象文字は1文字にしてください");
+        return 0;
+    }
+    if (strpbrk(c->replace_text, "\r\n")) {
+        snprintf(err, ec, "置き換え後の文字列に改行は使えません");
+        return 0;
+    }
     return 1;
 }
 int config_save(const Config*c,char*err,size_t ec){
@@ -254,7 +297,11 @@ int config_save(const Config*c,char*err,size_t ec){
 #else
     json_escape(c->obs_password,p,sizeof(p));
 #endif
-    char body[20000];int n=snprintf(body,sizeof(body),
+    char target[6 * sizeof(c->replace_target) + 1];
+    char replacement[6 * sizeof(c->replace_text) + 1];
+    json_escape(c->replace_target, target, sizeof(target));
+    json_escape(c->replace_text, replacement, sizeof(replacement));
+    char body[20000 + sizeof(target) + sizeof(replacement)];int n=snprintf(body,sizeof(body),
         "{\n  \"song_db\": \"%s\",\n  \"score_db\": \"%s\",\n  \"scoredatalog_db\": \"%s\",\n"
         "  \"obs\": {\"host\": \"%s\", \"port\": %d, "
 #ifdef _WIN32
@@ -263,9 +310,10 @@ int config_save(const Config*c,char*err,size_t ec){
         "\"password\": \"%s\"},\n"
 #endif
         "  \"estimate_song_start\": %s,\n  \"auto_generate\": %s,\n"
-        "  \"include_artist\": %s,\n  \"offset_seconds\": %.3f\n}\n",
+        "  \"include_artist\": %s,\n  \"offset_seconds\": %.3f,\n"
+        "  \"replace_target\": \"%s\",\n  \"replace_text\": \"%s\"\n}\n",
         a,b,d,h,c->obs_port,p,c->estimate_song_start?"true":"false",c->auto_generate?"true":"false",
-        c->include_artist?"true":"false",c->offset_seconds);
+        c->include_artist?"true":"false",c->offset_seconds,target,replacement);
     if(n<=0||(size_t)n>=sizeof(body)){snprintf(err,ec,"設定の長さが上限を超えています");return 0;}
     char path[BST_PATH];app_path(path,sizeof(path),"config.json");
     if(!app_write_file(path,body,(size_t)n)){snprintf(err,ec,"config.json を保存できませんでした");return 0;}
