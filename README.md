@@ -1,0 +1,173 @@
+# oraja TimeStamper / Windows版
+
+OBS Studioの配信開始・終了を監視し、**配信終了後にだけ**beatorajaのSQLite DBを一括読み込み、YouTube概要欄用のタイムスタンプを生成するC言語プログラムです。
+
+## 実行ファイル
+
+- `timestamp.exe` — 通常は黒いコマンドプロンプト画面で動くOBS監視・タイムスタンプ生成プログラム。
+- `config.exe` — Win32 GUIの設定画面。最初に設定がない、または必須設定が不足している場合は`timestamp.exe`から自動起動します。後で設定を変えたい場合もこのEXEを直接実行します。
+
+ビルドすると、プロジェクトルートに2つの実行ファイルが生成されます。実行にPythonは不要です。
+
+## 動作の流れ
+
+1. `config.exe`で`song_db`、`score_db`（任意）、`scoredatalog_db`（推奨）、OBSの接続先・ポート・パスワードを設定。
+2. OBSの**配信を開始する前**に`timestamp.exe`または`start_monitor.bat`を実行する。設定が足りなければ設定GUIを自動表示。
+3. OBSの配信開始イベントで、開始時刻を`sessions/…json`に保存。
+4. 配信中はDBを繰り返し読まず、OBS WebSocket v5の状態イベントだけを待つ。
+5. OBSの配信終了イベントで終了時刻を保存。その後、`scoredatalog.db`と`songdata.db`から結果を読み取り`_timestamps.txt`と`_report.txt`を生成。
+6. `Ctrl+C`でコンソール監視を終了。配信中に監視を中断した場合は未完了セッションを残します。
+
+## ビルド（Windows / MinGW）
+
+1. MinGW の GCC を用意します。既定のパスは `D:\gcc\mingw32\bin\gcc.exe` です。
+2. [SQLite のダウンロードページ](https://www.sqlite.org/download.html) から SQLite amalgamation を入手し、`sqlite3.c` と `sqlite3.h` を `external\sqlite\` に置きます。
+3. PowerShell でプロジェクトルートを開き、ビルドします。
+
+   ```powershell
+   .\build.bat
+   ```
+
+GCC や SQLite を別の場所に置いている場合は、ビルド前にパスを指定できます。
+
+```powershell
+$env:BST_CC = 'C:\mingw64\bin\gcc.exe'
+$env:BST_SQLITE_DIR = 'C:\deps\sqlite-amalgamation'
+.\build.bat
+```
+
+`BST_CC` には `gcc.exe` のパス、`BST_SQLITE_DIR` には `sqlite3.c` と `sqlite3.h` があるフォルダーを指定します。SQLite は `timestamp.exe` に組み込まれるため、実行時に SQLite の DLL は不要です。
+
+## 初期設定 (`config.exe`)
+
+Win32 GUIから以下を編集できます。
+
+| 設定 | 説明 |
+|---|---|
+| 楽曲DB | `songdata.db` または `song.db` の実ファイルパス（必須） |
+| スコアDB | `score.db` のパス（任意・代替用） |
+| プレー履歴DB | `scoredatalog.db`（最優先・推奨） |
+| OBS IP/ホスト | 例 `localhost` / `192.168.1.20` |
+| OBSポート | 通常 `4455` |
+| OBS WebSocketパスワード | OBS > ツール > WebSocketサーバー設定で確認 |
+| 曲開始時刻を推定 | 結果保存時刻－譜面長（デフォルトON） |
+| 配信終了時に自動生成 | デフォルトON |
+| アーティスト名を含める | デフォルトOFF |
+| 補正秒数 | 正の数ならタイムスタンプをその秒数早める（例 `160` / `2:40`） |
+
+`score.db`と`scoredatalog.db`は両方必須ではありません。**どちらか一方が存在すれば保存できます**。両方あれば`scoredatalog.db`を優先します。
+
+`config.json`はEXEのあるフォルダに保存されます。Windows版のOBSパスワードは**Windows DPAPI（ユーザー単位）で暗号化して保存**し、JSON中に平文を保存しません。別PC・別Windowsアカウントへ設定をコピーした場合、パスワードは再設定してください。`config.json`や実データはGitHubにコミットしないでください。
+
+**OBSの準備**：OBS Studio 28以降のWebSocket v5を有効にしてください。OBSと別PCで通信する場合は、認証パスワードを設定し、信頼できるネットワークでのみ使ってください。通常のobs-websocketの`ws://`通信はTLSで暗号化されません。
+
+## 起動とコマンド
+
+通常は次のコマンドだけで監視できます。
+
+```bat
+cd /d C:\BeatorajaStreamTimestamps_C
+timestamp.exe
+```
+
+または `start_monitor.bat` をダブルクリックしてください。
+
+開始・終了を手動で記録したい場合：
+
+```bat
+timestamp.exe start
+timestamp.exe stop
+```
+
+日時を明示して記録する場合：
+
+```bat
+timestamp.exe start --at "2026-11-16T19:00:00+09:00"
+timestamp.exe stop  --at "2026-11-16T21:30:00+09:00"
+```
+
+終了済み配信のタイムスタンプを再生成する場合：
+
+```bat
+timestamp.exe generate
+timestamp.exe generate --offset 160
+timestamp.exe generate --basis result
+timestamp.exe generate --basis estimated_start
+timestamp.exe generate --session "sessions\20261116_190000_1794823200.json"
+```
+
+`--offset 160`（または`--offset 2:40`）はタイムスタンプを160秒前倒しします。`--basis result`は曲長を引かず結果保存時刻を使います。`generate`ではDBを読み直すので、曲DB更新後も再生成できます。タイムゾーン付きISO時刻を推奨します。
+
+## 出力構成
+
+```text
+BeatorajaStreamTimestamps_C/
+  timestamp.exe
+  config.exe
+  config.json               # 初回GUI保存後
+  active_session.json       # 配信中のみ
+  last_session.json         # 最後に終了した配信
+  sessions/
+    YYYYMMDD_HHMMSS_....json
+    YYYYMMDD_HHMMSS_...._timestamps.txt
+    YYYYMMDD_HHMMSS_...._report.txt
+  logs/
+    timestamp.log                # 最大2MiB + 世代バックアップ3つ
+  src/                      # Cソース
+  build.bat
+  start_monitor.bat
+```
+
+生成される`_timestamps.txt`はUTF-8 BOM付きです。
+
+```text
+0:00 配信開始
+3:12 Sample Song [HYPER]
+6:45 Another Song
+10:21 Sample Song [HYPER]
+1:32:48 配信終了
+```
+
+同じ譜面を複数回プレーしていれば、それぞれ別の行に出力します（`scoredatalog.db`に残っている場合）。
+
+## DBの仕様と時刻精度
+
+- `scoredatalog.db` の `scoredatalog(sha256, date)` から配信開始～終了の結果保存時刻（Unix秒）を抽出し、すべてのプレーを並べます。
+- `songdata.db` の `song(sha256, title, subtitle, artist, length)` で名称と譜面長を検索します。`length`はミリ秒です。
+- 既定の曲開始推定は**結果保存時刻－譜面長**です。**実際の選曲時刻ではありません**。ロード時間・途中FAILED・結果画面・配信側の遅延でずれます。
+- `score.db`は同一譜面の最終結果しか保存しないため、同じ曲を繰り返しプレーした履歴を復元できません。
+- 未記録のプレー・曲名不明・長さ不明のケースはレポートに注意を書きます。
+- OBSイベントが取れなかった場合、再接続時の`GetStreamStatus`から**配信継続時間を使った開始推定**を行います。終了のイベントが失われた場合は正確な停止時刻を復元できません。`stop --at`で実際の終了時刻を指定してください。
+- OBSから来る`StreamStateChanged`イベントはOBSの配信ボタンの状態であり、YouTube側の配信公開画面で「ライブ開始」を押した瞬間とは必ずしも同じではありません。
+
+**DBはSQLite読み取り専用で開きます。beatorajaのDBを変更しません。**
+
+## 障害時・復旧
+
+- `logs/timestamp.log`を確認してください。実行EXEの隣に生成します。
+- OBS接続に失敗すると5秒間隔で再接続します。パスワード違いが続く場合は`config.exe`を開いて直してください。
+- OBSが途中で終了したりネットワークが切れても、開始時刻は`active_session.json`と`sessions/*.json`に保存済みです。
+- 監視できない間に配信が終了し、開始と終了の両方が取得できなくなった場合は、**OBS状態だけでは実際の終了時刻を復元できません**。`timestamp.exe stop --at "正しい日時"`で終了記録し、必要なら`generate`で再生成してください。
+- `config.json`が破損・未設定の場合は`config.exe`が自動で開きます。設定変更時は直接`config.exe`を起動できます。
+
+## 開発用テスト
+
+Linuxでは、SQLite3開発用ライブラリがあれば**生成ロジックだけ**テストできます（Windows依存のOBS・設定GUIは含みません）。
+
+```bash
+mkdir -p build
+gcc -D_POSIX_C_SOURCE=200809L -std=c11 -O2 -Isrc src/cli.c src/common.c src/json.c src/session.c src/generator.c -o build/timestamp_test -lsqlite3 -lm
+python -m unittest discover -s tests -v
+```
+
+Pythonは開発用テストスクリプトでのみ使用します。実際のCプログラムには不要です。
+
+## ライセンス
+
+[MIT License](LICENSE)
+
+## 参照資料
+
+- [OBS websocket 5.x protocol](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md)
+- [beatoraja SQLiteSongDatabaseAccessor.java](https://github.com/exch-bms2/beatoraja/blob/master/src/bms/player/beatoraja/song/SQLiteSongDatabaseAccessor.java)
+- [beatoraja ScoreDataLogDatabaseAccessor.java](https://github.com/exch-bms2/beatoraja/blob/master/src/bms/player/beatoraja/ScoreDataLogDatabaseAccessor.java)

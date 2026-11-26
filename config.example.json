@@ -1,0 +1,10 @@
+{
+  "song_db": "G:/beatoraja/songdata.db",
+  "score_db": "G:/beatoraja/player/player1/score.db",
+  "scoredatalog_db": "G:/beatoraja/player/player1/scoredatalog.db",
+  "obs": {"host": "localhost", "port": 4455, "password_dpapi": ""},
+  "estimate_song_start": true,
+  "auto_generate": true,
+  "include_artist": false,
+  "offset_seconds": 0
+}

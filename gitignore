@@ -1,0 +1,41 @@
+# ローカル設定・配信記録
+/config.json
+/active_session.json
+/last_session.json
+/sessions/
+/logs/
+/history.txt
+/timestamps_*.txt
+/*_timestamps.txt
+/*_report.txt
+
+# beatoraja のローカルデータベースと SQLite の補助ファイル
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Windows のビルド成果物
+/build/
+/*.exe
+/*.dll
+*.o
+*.obj
+
+# ローカルで配置する SQLite amalgamation
+/external/sqlite/
+/external/sqlite3/
+/sqlite/
+/sqlite3/
+/sqlite-amalgamation-*/
+/external/sqlite-amalgamation-*/
+/sqlite3.c
+/sqlite3.h
+/sqlite3ext.h
+/src/sqlite3.c
+/src/sqlite3.h
+/src/sqlite3ext.h
+
+# Python テストのキャッシュ
+__pycache__/
+*.pyc

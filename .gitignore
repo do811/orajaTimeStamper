@@ -1,0 +1,10 @@
+/config.json
+/active_session.json
+/last_session.json
+/sessions/
+/logs/
+/*.exe
+/*.dll
+/build/
+*.o
+*.obj
