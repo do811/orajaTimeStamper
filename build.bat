@@ -39,17 +39,26 @@ if not exist build goto :sqlite_failed
 echo Using compiler: "%CC%"
 echo Using SQLite sources: "%SQLITE_DIR%"
 set "WARN=-std=c11 -O2 -Wall -Wextra -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0A00"
-echo [1/3] Compiling SQLite ...
+echo [1/4] Compiling SQLite ...
 "%CC%" -std=c11 -O2 -DSQLITE_OMIT_LOAD_EXTENSION -c "%SQLITE_DIR%\sqlite3.c" -o "build\sqlite3.o"
 if errorlevel 1 goto :sqlite_failed
 
-echo [2/3] Building timestamp.exe ...
-"%CC%" %WARN% -I"%SQLITE_DIR%" -municode src\cli.c src\common.c src\json.c src\session.c src\generator.c src\obs_win.c "build\sqlite3.o" -o timestamp.exe -lwinhttp -lcrypt32 -lbcrypt -lshell32 -lm
+echo [2/4] Building timestamp.exe ...
+"%CC%" %WARN% -I"%SQLITE_DIR%" -municode src\cli.c src\common.c src\json.c src\session.c src\generator.c src\format.c src\obs_win.c "build\sqlite3.o" -o timestamp.exe -lwinhttp -lcrypt32 -lbcrypt -lshell32 -lm
 if errorlevel 1 goto :timestamp_failed
 
-echo [3/3] Building config.exe ...
-"%CC%" %WARN% -municode -mwindows src\config_gui.c src\common.c src\json.c -o config.exe -lcomdlg32 -lcrypt32 -luser32 -lgdi32 -lm
+echo [3/4] Building config.exe ...
+"%CC%" %WARN% -municode -mwindows src\config_gui.c src\common.c src\json.c -o config.exe -lcomdlg32 -lcrypt32 -luser32 -lgdi32 -lshell32 -lm
 if errorlevel 1 goto :config_failed
+
+echo [4/4] Building regenerate.exe ...
+set "CSC=%SystemRoot%\Microsoft.NET\Framework\v4.0.30319\csc.exe"
+if not exist "%CSC%" (
+    echo ERROR: Install .NET Framework 4.8 with the C# compiler.
+    exit /b 1
+)
+"%CSC%" /nologo /target:winexe /codepage:65001 /out:regenerate.exe /reference:System.Windows.Forms.dll,System.Drawing.dll,System.Web.dll,System.Web.Extensions.dll gui\Settings.cs gui\Regenerate.cs
+if errorlevel 1 exit /b 1
 
 rem Copy compiler runtime DLLs from the selected toolchain.
 for %%D in (libwinpthread-1.dll libgcc_s_seh-1.dll libgcc_s_dw2-1.dll libgcc_s_sjlj-1.dll) do (
@@ -58,7 +67,7 @@ for %%D in (libwinpthread-1.dll libgcc_s_seh-1.dll libgcc_s_dw2-1.dll libgcc_s_s
 if not exist sessions mkdir sessions
 if not exist logs mkdir logs
 echo.
-echo Build complete: timestamp.exe / config.exe
+echo Build complete: timestamp.exe / config.exe / regenerate.exe
 exit /b 0
 
 :missing_gcc

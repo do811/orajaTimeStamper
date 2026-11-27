@@ -26,6 +26,7 @@ void app_root(char *out, size_t cap);
 void app_path(char *out, size_t cap, const char *relative);
 void app_log(const char *fmt, ...);
 void app_mkdir(const char *path);
+int app_read_file_limit(const char *path, char **out, long limit);
 int app_read_file(const char *path, char **out);
 int app_write_file(const char *path, const char *buf, size_t len);
 int app_file_exists(const char *path);

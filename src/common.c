@@ -88,9 +88,12 @@ static FILE *app_fopen(const char *name, const char *mode) {
 #endif
 }
 int app_read_file(const char *path, char **out) {
+    return app_read_file_limit(path, out, 8L*1024*1024);
+}
+int app_read_file_limit(const char *path, char **out, long limit) {
     FILE *f=app_fopen(path,"rb"); if (!f) return 0;
     if (fseek(f,0,SEEK_END)!=0) { fclose(f);return 0; }
-    long sz=ftell(f); if(sz<0 || sz>8*1024*1024) { fclose(f);return 0; }
+    long sz=ftell(f); if(sz<0 || sz>limit) { fclose(f);return 0; }
     rewind(f);char *p=(char*)malloc((size_t)sz+1);if(!p){fclose(f);return 0;}
     size_t nr=fread(p,1,(size_t)sz,f);fclose(f);if(nr!=(size_t)sz){free(p);return 0;}
     p[sz]=0;*out=p;return 1;

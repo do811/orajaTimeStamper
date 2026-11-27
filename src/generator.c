@@ -1,4 +1,11 @@
-#include "app.h"
+#include "format.h"
+#include <errno.h>
+#include <limits.h>
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#endif
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,17 +64,30 @@ static FILE* utf8_open(const char*path){
     return fopen(path,"wb");
 #endif
 }
-static void write_chapter_name(FILE *out, const char *name, const Config *config) {
-    size_t target_length = strlen(config->replace_target);
-    if (target_length) {
-        const char *match;
-        while ((match = strstr(name, config->replace_target)) != NULL) {
-            fwrite(name, 1, (size_t)(match - name), out);
-            fputs(config->replace_text, out);
-            name = match + target_length;
+static FILE *new_timestamp(int64_t start, char *path, size_t cap) {
+    char date[32], relative[100];
+    time_t ts = (time_t)start;
+    struct tm *local = localtime(&ts);
+    if (!local || !strftime(date,sizeof(date),"%Y%m%d__%H%M",local)) return NULL;
+    for (unsigned v = 1; v < UINT_MAX; ++v) {
+        snprintf(relative,sizeof(relative),"timestamps/%s_%u.txt",date,v);
+        app_path(path,cap,relative);
+#ifdef _WIN32
+        wchar_t wide[BST_PATH];
+        app_utf8_to_wide(path,wide,BST_PATH);
+        int fd = _wopen(wide,_O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY,_S_IREAD | _S_IWRITE);
+        if (fd >= 0) {
+            FILE *f = _fdopen(fd,"wb");
+            if (!f) { _close(fd); _wremove(wide); }
+            return f;
         }
+#else
+        FILE *f = fopen(path,"wbx");
+        if (f) return f;
+#endif
+        if (errno != EEXIST) return NULL;
     }
-    fputs(name, out);
+    return NULL;
 }
 int generate_timestamps(const Config*c,const Session*s,double offset_override,int estimate_override,char*err,size_t ec){
     if(!s->start||s->end<=s->start){snprintf(err,ec,"完了済み配信セッションが必要です");return 0;}
@@ -89,8 +109,8 @@ int generate_timestamps(const Config*c,const Session*s,double offset_override,in
     int ok=sqlite3_prepare_v2(score,select,-1,&plays,NULL)==SQLITE_OK;
     const int subtitle=has_column(songs,"song","subtitle"),artist=has_column(songs,"song","artist"),
         length=has_column(songs,"song","length"),adddate=has_column(songs,"song","adddate");
-    snprintf(select,sizeof(select),"SELECT title,%s,%s,%s FROM song WHERE sha256=?1 %s LIMIT 1",
-        subtitle?"subtitle":"''",artist?"artist":"''",length?"length":"NULL",adddate?"ORDER BY adddate DESC":"");
+    snprintf(select,sizeof(select),"SELECT title,%s,%s,%s,%s FROM song WHERE sha256=?1 %s LIMIT 1",
+        subtitle?"subtitle":"''",artist?"artist":"''",length?"length":"NULL",has_column(songs,"song","md5")?"md5":"NULL",adddate?"ORDER BY adddate DESC":"");
     if(ok)ok=sqlite3_prepare_v2(songs,select,-1,&lookup,NULL)==SQLITE_OK;
     if(!ok){snprintf(err,ec,"SQLiteクエリを準備できません: %s / %s",sqlite3_errmsg(score),sqlite3_errmsg(songs));
         sqlite3_finalize(plays);sqlite3_finalize(lookup);sqlite3_close(score);sqlite3_close(songs);return 0;}
@@ -108,6 +128,12 @@ int generate_timestamps(const Config*c,const Session*s,double offset_override,in
         }
         sqlite3_finalize(st);
     }
+    OutputFormat format = {0};
+    if (!format_open(&format,c,err,ec)) {
+        sqlite3_finalize(plays); sqlite3_finalize(lookup);
+        sqlite3_close(songs); sqlite3_close(score);
+        return 0;
+    }
     int estimated=estimate_override<0?c->estimate_song_start:estimate_override;
     double offset=isnan(offset_override)?c->offset_seconds:offset_override;
     int missing=0,nolength=0,clamped=0,n=0,capacity=0,run_rc=SQLITE_OK;
@@ -116,16 +142,18 @@ int generate_timestamps(const Config*c,const Session*s,double offset_override,in
         const char *sha=(const char*)sqlite3_column_text(plays,0);if(!sha)continue;
         double played=(double)sqlite3_column_int64(plays,1);
         char name[BST_TEXT];double millis=-1;
-        if(!find_song(lookup,sha,name,sizeof(name),&millis,c->include_artist))missing++;
+        int found = find_song(lookup,sha,name,sizeof(name),&millis,c->include_artist);
+        if (!found) missing++;
         double sec=played-(double)s->start;
         if(estimated){if(millis>0&&millis<=3600000.0)sec-=millis/1000.0;else nolength++;}
         sec-=offset;if(sec<0){sec=0;clamped++;}
         if(n==capacity){int cap=capacity?capacity*2:32;Chapter*newc=(Chapter*)realloc(chapters,(size_t)cap*sizeof(*chapters));
             if(!newc){snprintf(err,ec,"メモリ不足");run_rc=SQLITE_NOMEM;break;}chapters=newc;capacity=cap;}
-        chapters[n].sec=sec;chapters[n].seq=n;chapters[n].name=(char*)malloc(strlen(name)+1);
+        chapters[n].sec=sec;chapters[n].seq=n;chapters[n].name=format_label(&format,name,sha,found ? (const char *)sqlite3_column_text(lookup,4) : NULL);
         if(!chapters[n].name){snprintf(err,ec,"メモリ不足");run_rc=SQLITE_NOMEM;break;}
-        strcpy(chapters[n].name,name);n++;
+        n++;
     }
+    format_close(&format);
     if(run_rc!=SQLITE_DONE&&run_rc!=SQLITE_NOMEM)
         snprintf(err,ec,"スコアDB検索エラー: %s",sqlite3_errmsg(score));
     sqlite3_finalize(plays);sqlite3_finalize(lookup);sqlite3_close(songs);sqlite3_close(score);
@@ -133,28 +161,33 @@ int generate_timestamps(const Config*c,const Session*s,double offset_override,in
     qsort(chapters,(size_t)n,sizeof(*chapters),cmp_chapter);
     char dir[BST_PATH],out[BST_PATH],report[BST_PATH],relative[256];
     if (!*s->id) { snprintf(err, ec, "セッションIDが不正です"); goto fail; }
-    snprintf(relative, sizeof(relative), "timestamps/%s_timestamp.txt", s->id);
-    app_path(out, sizeof(out), relative);
     snprintf(relative, sizeof(relative), "sessions/%s_report.txt", s->id);
     app_path(report, sizeof(report), relative);
-    if (!*out || !*report) {
+    if (!*report) {
         snprintf(err, ec, "出力パスが長すぎます");
         goto fail;
     }
     app_path(dir, sizeof(dir), "timestamps");
     app_mkdir(dir);
-    FILE *f=utf8_open(out);if(!f){snprintf(err,ec,"出力できません: %s",out);goto fail;}
+    out[0]=0;
+    FILE *f=new_timestamp(s->start,out,sizeof(out));if(!f){snprintf(err,ec,"出力できません: %s",out);goto fail;}
     fputs("\xef\xbb\xbf",f);
     fputs("0:00 配信開始\n",f);
     for(int i=0;i<n;i++){char stamp[64];app_chapter(chapters[i].sec,stamp,sizeof(stamp));
         fprintf(f,"%s ",stamp);
-        write_chapter_name(f, chapters[i].name, c);
+        fputs(chapters[i].name, f);
         fputc('\n', f);
     }
     char endtime[64];app_chapter((double)(s->end-s->start),endtime,sizeof(endtime));
     fprintf(f,"%s 配信終了\n",endtime);
     int writeok=ferror(f)==0;writeok=fclose(f)==0&&writeok;
-    if(!writeok){snprintf(err,ec,"タイムスタンプ書き込みに失敗");goto fail;}
+    if(!writeok){
+#ifdef _WIN32
+        wchar_t wide[BST_PATH];app_utf8_to_wide(out,wide,BST_PATH);_wremove(wide);
+#else
+        remove(out);
+#endif
+        snprintf(err,ec,"タイムスタンプ書き込みに失敗");goto fail;}
     f=utf8_open(report);
     if(f){char startiso[64],endiso[64];app_local_iso(s->start,startiso,sizeof(startiso));app_local_iso(s->end,endiso,sizeof(endiso));
         fputs("\xef\xbb\xbf",f);
@@ -173,13 +206,13 @@ int generate_timestamps(const Config*c,const Session*s,double offset_override,in
     app_log("[generate] %d曲を書き出しました: %s",n,out);
     if(!strcmp(table,"score"))app_log("[warning] score.dbは複数回プレーの完全な履歴を持ちません");
     for (int i = 0; i < n; i++) {
-        free(chapters[i].name);
+        sqlite3_free(chapters[i].name);
     }
     free(chapters);
     return 1;
 fail:
     for (int i = 0; i < n; i++) {
-        free(chapters[i].name);
+        sqlite3_free(chapters[i].name);
     }
     free(chapters);
     return 0;

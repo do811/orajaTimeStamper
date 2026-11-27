@@ -1,4 +1,6 @@
 # ローカル設定・配信記録
+/output-format.json
+/output-format.json.*.tmp
 /config.json
 /active_session.json
 /last_session.json
